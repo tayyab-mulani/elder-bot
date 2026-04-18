@@ -1,11 +1,16 @@
 """
 build_index.py
 --------------
-Reads the master Q&A CSV, embeds every answer using
-paraphrase-MiniLM-L6-v2, and persists the Chroma vector store to models/chroma_db/.
+Step 2 of 2 in the data pipeline.
 
-Run once before launching the app:
-    python scripts/build_index.py
+Reads data/elder_qa_master.csv (produced by preprocess.py), embeds every
+answer using paraphrase-MiniLM-L6-v2, and persists the Chroma vector store
+to models/chroma_db/.
+
+Full pipeline:
+    python scripts/preprocess.py   <- Step 1: clean & merge raw CSVs
+    python scripts/build_index.py  <- Step 2: embed & index into Chroma
+    python -m streamlit run app/main.py
 """
 
 import os
@@ -102,4 +107,7 @@ def build():
     print("\nYou can now run the app:  streamlit run app/main.py")
 
 if __name__ == "__main__":
+    print("\n" + "=" * 58)
+    print("  Step 2/2 — Building vector index")
+    print("=" * 58 + "\n")
     build()

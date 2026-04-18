@@ -61,6 +61,28 @@ with tab1:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
+    # ── Resolve input: suggestion button OR typed input ─────────────────
+    user_input = None
+
+    # Suggested questions — always visible
+    suggestions = [
+        "What is the 2% Rule in risk management?",
+        "How does the Triple Screen Trading System work?",
+        "What role does psychology play in trading according to Elder?",
+        "How does Elder use MACD to time trade entries?",
+    ]
+    if not st.session_state.messages:
+        st.markdown("**Try asking:**")
+    cols = st.columns(len(suggestions))
+    for col, suggestion in zip(cols, suggestions):
+        if col.button(suggestion, use_container_width=True, key=f"btn_{suggestion[:20]}"):
+            user_input = suggestion
+
+    # Chat input — always rendered so user can type freely
+    typed = st.chat_input("Ask about Elder's trading methods...")
+    if typed:
+        user_input = typed
+
     # Render existing messages
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
@@ -75,27 +97,6 @@ with tab1:
                         st.markdown(src.page_content)
                         if i < len(msg["sources"]):
                             st.divider()
-
-    # Suggested questions (only shown when chat is empty)
-    if not st.session_state.messages:
-        st.markdown("**Try asking:**")
-        suggestions = [
-            "What is the 2% Rule in risk management?",
-            "How does the Triple Screen Trading System work?",
-            "What role does psychology play in trading according to Elder?",
-            "How does Elder use MACD to time trade entries?",
-        ]
-        cols = st.columns(len(suggestions))
-        for col, suggestion in zip(cols, suggestions):
-            if col.button(suggestion, use_container_width=True):
-                st.session_state.pending_question = suggestion
-                st.rerun()
-
-    # Handle suggestion button click
-    if "pending_question" in st.session_state:
-        user_input = st.session_state.pop("pending_question")
-    else:
-        user_input = st.chat_input("Ask about Elder's trading methods...")
 
     if user_input:
         # Display user message
