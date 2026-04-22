@@ -48,6 +48,86 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
+# ── Performance metric helpers ─────────────────────────────────────────────
+
+def _compute_metrics(
+    equity_curve: list,
+    close_prices: pd.Series,
+    trade_log:    list,
+    initial_capital: float,
+) -> dict:
+    """
+    Compute performance metrics from an equity curve, the underlying price
+    series, and a list of closed trades.
+
+    trade_log entries are dicts:
+        {"side": "long"/"short", "entry_price": float, "exit_price": float, "pnl": float}
+    """
+    equity = pd.Series(equity_curve, index=close_prices.index)
+
+    # ── Total return & CAGR ────────────────────────────────────────────────
+    final_equity = float(equity.iloc[-1])
+    total_return = (final_equity - initial_capital) / initial_capital * 100
+
+    n_days = (equity.index[-1] - equity.index[0]).days
+    years  = n_days / 365.25 if n_days > 0 else 1.0
+    if final_equity > 0 and initial_capital > 0:
+        cagr = ((final_equity / initial_capital) ** (1 / years) - 1) * 100
+    else:
+        cagr = 0.0
+
+    # ── Sharpe ratio (annualized, risk-free = 0) ───────────────────────────
+    daily_returns = equity.pct_change().dropna()
+    if len(daily_returns) > 1 and daily_returns.std() > 0:
+        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+    else:
+        sharpe = 0.0
+
+    # ── Max drawdown ───────────────────────────────────────────────────────
+    running_max = equity.cummax()
+    drawdown    = (equity - running_max) / running_max
+    max_dd      = float(drawdown.min()) * 100   # negative number, e.g. -23.4
+
+    # ── Trade statistics ───────────────────────────────────────────────────
+    n_trades   = len(trade_log)
+    wins       = [t for t in trade_log if t["pnl"] > 0]
+    losses     = [t for t in trade_log if t["pnl"] <= 0]
+    n_wins     = len(wins)
+    win_rate   = (n_wins / n_trades * 100) if n_trades > 0 else 0.0
+
+    avg_win    = float(np.mean([t["pnl"] for t in wins]))   if wins   else 0.0
+    avg_loss   = float(np.mean([t["pnl"] for t in losses])) if losses else 0.0
+
+    # Profit factor = gross wins / gross losses  (abs)
+    gross_win  = sum(t["pnl"] for t in wins)
+    gross_loss = abs(sum(t["pnl"] for t in losses))
+    profit_factor = (gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win > 0 else 0.0
+
+    # ── Buy & Hold benchmark ───────────────────────────────────────────────
+    # Same capital, same period, just hold the underlying from day 1.
+    first_price = float(close_prices.iloc[0])
+    last_price  = float(close_prices.iloc[-1])
+    bh_return   = (last_price - first_price) / first_price * 100
+    bh_final    = initial_capital * (1 + bh_return / 100)
+    alpha       = total_return - bh_return   # strategy - benchmark, in %
+
+    return {
+        "total_return":   total_return,
+        "cagr":           cagr,
+        "sharpe":         sharpe,
+        "max_drawdown":   max_dd,
+        "n_trades":       n_trades,
+        "n_wins":         n_wins,
+        "win_rate":       win_rate,
+        "avg_win":        avg_win,
+        "avg_loss":       avg_loss,
+        "profit_factor":  profit_factor,
+        "bh_return":      bh_return,
+        "bh_final":       bh_final,
+        "alpha":          alpha,
+    }
+
+
 # ── Main backtest function ─────────────────────────────────────────────────
 
 def run_backtest(
@@ -79,14 +159,16 @@ def run_backtest(
     -------
     dict with keys:
         data          : pd.DataFrame  full OHLCV + indicators + equity
-        buy_dates     : list[datetime]
-        sell_dates    : list[datetime]
+        buy_dates     : list[datetime]           — long entries
+        sell_dates    : list[datetime]           — short entries
         buy_prices    : list[float]
         sell_prices   : list[float]
         final_equity  : float
         total_return  : float  (%)
-        n_long_trades : int
-        n_short_trades: int
+        n_long_trades : int    — long entries taken
+        n_short_trades: int    — short entries taken
+        metrics       : dict   — performance metrics (see _compute_metrics)
+        trade_log     : list[dict]  — closed round-trip trades
         error         : str | None  — non-None if download/calc failed
     """
 
@@ -116,15 +198,16 @@ def run_backtest(
     data["MACD"], data["MACD_signal"] = macd(data["Close"])
     data["RSI"] = rsi(data["Close"])
 
-    # 3. Simulate trades ('s exact loop logic)
+    # 3. Simulate trades
     capital  = initial_capital
     cash     = capital
     position = 0        #  0=flat, 1=long, -1=short
     entry_price = 0.0
 
     equity_curve  = []
-    buy_indices   = []
-    sell_indices  = []
+    buy_indices   = []   # long entries
+    sell_indices  = []   # short entries
+    trade_log     = []   # closed round-trip trades
 
     for i in range(len(data)):
         price      = float(data["Close"].iloc[i])
@@ -150,12 +233,26 @@ def run_backtest(
 
         # EXIT LONG
         elif position == 1 and rsi_high:
-            cash    += price - entry_price
+            pnl      = price - entry_price
+            cash    += pnl
+            trade_log.append({
+                "side":        "long",
+                "entry_price": entry_price,
+                "exit_price":  price,
+                "pnl":         pnl,
+            })
             position = 0
 
         # EXIT SHORT
         elif position == -1 and rsi_low:
-            cash    += entry_price - price
+            pnl      = entry_price - price
+            cash    += pnl
+            trade_log.append({
+                "side":        "short",
+                "entry_price": entry_price,
+                "exit_price":  price,
+                "pnl":         pnl,
+            })
             position = 0
 
         # EQUITY SNAPSHOT
@@ -178,16 +275,26 @@ def run_backtest(
     buy_prices = [float(data["Close"].iloc[i]) for i in buy_indices]
     sell_prices= [float(data["Close"].iloc[i]) for i in sell_indices]
 
+    # Performance metrics
+    metrics = _compute_metrics(
+        equity_curve   = equity_curve,
+        close_prices   = data["Close"],
+        trade_log      = trade_log,
+        initial_capital= initial_capital,
+    )
+
     return {
-        "data":           data,
-        "buy_dates":      buy_dates,
-        "sell_dates":     sell_dates,
-        "buy_prices":     buy_prices,
-        "sell_prices":    sell_prices,
-        "final_equity":   final_equity,
-        "total_return":   total_return,
-        "n_long_trades":  len(buy_indices),
-        "n_short_trades": len(sell_indices),
+        "data":            data,
+        "buy_dates":       buy_dates,
+        "sell_dates":      sell_dates,
+        "buy_prices":      buy_prices,
+        "sell_prices":     sell_prices,
+        "final_equity":    final_equity,
+        "total_return":    total_return,
+        "n_long_trades":   len(buy_indices),
+        "n_short_trades":  len(sell_indices),
         "initial_capital": initial_capital,
-        "error":          None,
+        "metrics":         metrics,
+        "trade_log":       trade_log,
+        "error":           None,
     }

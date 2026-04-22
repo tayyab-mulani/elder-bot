@@ -76,7 +76,7 @@ with tab1:
         st.markdown("**Try asking:**")
     cols = st.columns(len(suggestions))
     for col, suggestion in zip(cols, suggestions):
-        if col.button(suggestion, use_container_width=True, key=f"btn_{suggestion[:20]}"):
+        if col.button(suggestion, width="stretch", key=f"btn_{suggestion[:20]}"):
             user_input = suggestion
 
     # Chat input — always rendered so user can type freely
@@ -202,7 +202,7 @@ with tab2:
                 help="Short entry / long exit threshold — default: 53"
             )
 
-        run_btn = st.button("▶ Run Backtest", type="primary", use_container_width=True)
+        run_btn = st.button("▶ Run Backtest", type="primary", width="stretch")
 
     # ── Run and display results ─────────────────────────────────────────
     if run_btn:
@@ -224,24 +224,79 @@ with tab2:
             if result["error"]:
                 st.error(result["error"])
             else:
-                data       = result["data"]
-                final_eq   = result["final_equity"]
-                tot_ret    = result["total_return"]
-                n_long     = result["n_long_trades"]
-                n_short    = result["n_short_trades"]
+                data     = result["data"]
+                final_eq = result["final_equity"]
+                n_long   = result["n_long_trades"]
+                n_short  = result["n_short_trades"]
+                m        = result["metrics"]
 
-                # ── Metrics row ────────────────────────────────────────
-                st.markdown("#### Results")
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric(
+                # ── Performance metrics ────────────────────────────────
+                st.markdown("#### 📊 Performance Metrics")
+
+                # Row 1 — headline returns
+                r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+                r1c1.metric(
                     "Final Portfolio",
                     f"${final_eq:,.2f}",
-                    f"{tot_ret:+.2f}%",
-                    delta_color="normal",
+                    f"{m['total_return']:+.2f}%",
                 )
-                m2.metric("Starting Capital", f"${initial_capital:,.0f}")
-                m3.metric("Long entries",  n_long)
-                m4.metric("Short entries", n_short)
+                r1c2.metric(
+                    "Total Return",
+                    f"{m['total_return']:+.2f}%",
+                )
+                r1c3.metric(
+                    "CAGR",
+                    f"{m['cagr']:+.2f}%",
+                    help="Compound Annual Growth Rate — annualized return.",
+                )
+                r1c4.metric(
+                    "Sharpe Ratio",
+                    f"{m['sharpe']:.2f}",
+                    help="Annualized, risk-free rate = 0. >1 is good, >2 is very good.",
+                )
+
+                # Row 2 — risk & trade quality
+                r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+                r2c1.metric(
+                    "Max Drawdown",
+                    f"{m['max_drawdown']:.2f}%",
+                    help="Largest peak-to-trough equity decline. Closer to 0 is better.",
+                )
+                r2c2.metric(
+                    "Win Rate",
+                    f"{m['win_rate']:.1f}%",
+                    f"{m['n_wins']} / {m['n_trades']} trades",
+                )
+                r2c3.metric(
+                    "Profit Factor",
+                    f"{m['profit_factor']:.2f}" if m["profit_factor"] != float("inf") else "∞",
+                    help="Gross wins ÷ gross losses. >1 means profitable overall.",
+                )
+                r2c4.metric(
+                    "Total Trades",
+                    f"{m['n_trades']}",
+                    f"{n_long} long / {n_short} short entries",
+                    delta_color="off",
+                )
+
+                # Row 3 — buy & hold benchmark comparison
+                st.markdown("##### vs. Buy & Hold Benchmark")
+                b1, b2, b3 = st.columns(3)
+                b1.metric(
+                    "Buy & Hold Final",
+                    f"${m['bh_final']:,.2f}",
+                    f"{m['bh_return']:+.2f}%",
+                )
+                b2.metric(
+                    "Strategy Final",
+                    f"${final_eq:,.2f}",
+                    f"{m['total_return']:+.2f}%",
+                )
+                b3.metric(
+                    "Alpha (Strategy − B&H)",
+                    f"{m['alpha']:+.2f}%",
+                    help="Positive = strategy beat buy-and-hold. Negative = holding would have been better.",
+                )
 
                 # ── Chart 1: Price + signals ───────────────────────────
                 fig1 = make_subplots(
@@ -314,7 +369,7 @@ with tab2:
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     hovermode="x unified",
                 )
-                st.plotly_chart(fig1, use_container_width=True)
+                st.plotly_chart(fig1, width="stretch")
 
                 # ── Chart 2: PnL equity curve + RSI ───────────────────
                 fig2 = make_subplots(
@@ -363,7 +418,25 @@ with tab2:
                     hovermode="x unified",
                     showlegend=True,
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, width="stretch")
+
+                # ── Trade log ──────────────────────────────────────────
+                if result["trade_log"]:
+                    with st.expander(
+                        f"📋 Trade Log — {len(result['trade_log'])} closed trades",
+                        expanded=False,
+                    ):
+                        trade_df = pd.DataFrame(result["trade_log"])
+                        trade_df["entry_price"] = trade_df["entry_price"].round(2)
+                        trade_df["exit_price"]  = trade_df["exit_price"].round(2)
+                        trade_df["pnl"]         = trade_df["pnl"].round(2)
+                        trade_df["result"]      = trade_df["pnl"].apply(
+                            lambda x: "✅ Win" if x > 0 else "❌ Loss"
+                        )
+                        st.dataframe(
+                            trade_df[["side", "entry_price", "exit_price", "pnl", "result"]],
+                            width="stretch",
+                        )
 
                 # ── Raw data expander ──────────────────────────────────
                 with st.expander("🔍 View raw indicator data", expanded=False):
@@ -375,5 +448,5 @@ with tab2:
                         data[[c for c in cols_show if c in data.columns]]
                         .tail(100)
                         .style.format("{:.2f}"),
-                        use_container_width=True,
+                        width="stretch",
                     )
