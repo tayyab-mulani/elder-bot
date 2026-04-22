@@ -66,6 +66,7 @@ with tab1:
 
     # Suggested questions — always visible
     suggestions = [
+        "Who is Dr. Alexander Elder?",
         "What is the 2% Rule in risk management?",
         "How does the Triple Screen Trading System work?",
         "What role does psychology play in trading according to Elder?",

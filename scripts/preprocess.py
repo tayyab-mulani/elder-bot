@@ -39,7 +39,9 @@ OUTPUT_CSV = os.path.join(BASE_DIR, "data", "elder_qa_master.csv")
 # (filename, label, question_col, answer_col)
 FILE_REGISTRY = [
     ("Label3_RudrangGade.csv",               "Timing",           "Questions", "Answers"),
+    ("Elder_Label3_Timing_200QA.csv",               "Timing",           "Questions", "Answers"),
     ("Elder_Psychology.csv",                  "Psychology",       "Questions", "Answers"),
+    ("Elder_Label6_Psychology_200QA.csv",                  "Psychology",       "Questions", "Answers"),
     ("Elder_Personal_life_2.csv",             "Personal Life",    "Question",  "Answer"),
     ("Elder_Label4_RiskManagement_200QA.csv", "Risk Management",  "Questions", "Answers"),
     ("Elder_Adaptability.csv",              "Adaptability",     "Question",  "Answer"),
