@@ -2,42 +2,42 @@
 backtest_engine.py
 ------------------
 Alexander Elder's Triple Screen Trading Strategy backtester.
-
+ 
 All indicator logic and entry/exit rules are unchanged — they are wrapped
 in a single run_backtest() function so the Streamlit UI can call it with
 user-selected parameters.
-
+ 
 Indicators used:
     - EMA(win_short) and EMA(win_long)  → trend direction (Screen 1)
     - MACD + Signal line                → momentum confirmation (Screen 2)
     - RSI(14)                           → entry timing / exit trigger (Screen 3)
-
+ 
 Entry / Exit logic :
     LONG  entry : EMA_short > EMA_long  AND  MACD > Signal  AND  RSI < RSI_lower
     SHORT entry : EMA_short < EMA_long  AND  MACD < Signal  AND  RSI > RSI_upper
     EXIT  long  : RSI > RSI_upper
     EXIT  short : RSI < RSI_lower
 """
-
+ 
 import yfinance as yf
 import pandas as pd
 import numpy as np
-
-
+ 
+ 
 # ── Indicator functions ──────────────
-
+ 
 def ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
-
-
+ 
+ 
 def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
     ema_fast    = ema(series, fast)
     ema_slow    = ema(series, slow)
     macd_line   = ema_fast - ema_slow
     signal_line = ema(macd_line, signal)
     return macd_line, signal_line
-
-
+ 
+ 
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta    = series.diff()
     gain     = pd.Series(np.where(delta > 0, delta, 0), index=series.index)
@@ -46,10 +46,10 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     avg_loss = loss.rolling(period).mean()
     rs       = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
-
-
+ 
+ 
 # ── Performance metric helpers ─────────────────────────────────────────────
-
+ 
 def _compute_metrics(
     equity_curve: list,
     close_prices: pd.Series,
@@ -59,57 +59,57 @@ def _compute_metrics(
     """
     Compute performance metrics from an equity curve, the underlying price
     series, and a list of closed trades.
-
+ 
     trade_log entries are dicts:
         {"side": "long"/"short", "entry_price": float, "exit_price": float, "pnl": float}
     """
     equity = pd.Series(equity_curve, index=close_prices.index)
-
+ 
     # ── Total return & CAGR ────────────────────────────────────────────────
     final_equity = float(equity.iloc[-1])
     total_return = (final_equity - initial_capital) / initial_capital * 100
-
+ 
     n_days = (equity.index[-1] - equity.index[0]).days
     years  = n_days / 365.25 if n_days > 0 else 1.0
     if final_equity > 0 and initial_capital > 0:
         cagr = ((final_equity / initial_capital) ** (1 / years) - 1) * 100
     else:
         cagr = 0.0
-
+ 
     # ── Sharpe ratio (annualized, risk-free = 0) ───────────────────────────
     daily_returns = equity.pct_change().dropna()
     if len(daily_returns) > 1 and daily_returns.std() > 0:
         sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
     else:
         sharpe = 0.0
-
+ 
     # ── Max drawdown ───────────────────────────────────────────────────────
     running_max = equity.cummax()
     drawdown    = (equity - running_max) / running_max
     max_dd      = float(drawdown.min()) * 100   # negative number, e.g. -23.4
-
+ 
     # ── Trade statistics ───────────────────────────────────────────────────
     n_trades   = len(trade_log)
     wins       = [t for t in trade_log if t["pnl"] > 0]
     losses     = [t for t in trade_log if t["pnl"] <= 0]
     n_wins     = len(wins)
     win_rate   = (n_wins / n_trades * 100) if n_trades > 0 else 0.0
-
+ 
     avg_win    = float(np.mean([t["pnl"] for t in wins]))   if wins   else 0.0
     avg_loss   = float(np.mean([t["pnl"] for t in losses])) if losses else 0.0
-
+ 
     # Profit factor = gross wins / gross losses  (abs)
     gross_win  = sum(t["pnl"] for t in wins)
     gross_loss = abs(sum(t["pnl"] for t in losses))
     profit_factor = (gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win > 0 else 0.0
-
+ 
     # ── Buy & Hold benchmark ───────────────────────────────────────────────
     first_price = float(close_prices.iloc[0])
     last_price  = float(close_prices.iloc[-1])
     bh_return   = (last_price - first_price) / first_price * 100
     bh_final    = initial_capital * (1 + bh_return / 100)
     alpha       = total_return - bh_return
-
+ 
     return {
         "total_return":   total_return,
         "cagr":           cagr,
@@ -125,10 +125,10 @@ def _compute_metrics(
         "bh_final":       bh_final,
         "alpha":          alpha,
     }
-
-
+ 
+ 
 # ── Main backtest function ─────────────────────────────────────────────────
-
+ 
 def run_backtest(
     symbol:          str   = "SPY",
     start:           str   = "2020-01-01",
@@ -139,18 +139,18 @@ def run_backtest(
     rsi_upper:       float = 65.0,
     initial_capital: float = 10_000.0,
 ) -> dict:
-
+ 
     # 1. Download data
     try:
         raw = yf.download(symbol, start=start, end=end, progress=False)
         if raw.empty:
             return {"error": f"No data returned for '{symbol}'. Check the ticker."}
-
+ 
         if isinstance(raw.columns, pd.MultiIndex):
             data = raw.xs(symbol, axis=1, level="Ticker")
         else:
             data = raw.copy()
-
+ 
         if len(data) < win_long + 30:
             return {"error": (
                 f"Not enough data for {symbol} with win_long={win_long}. "
@@ -158,24 +158,24 @@ def run_backtest(
             )}
     except Exception as e:
         return {"error": f"Download failed: {e}"}
-
+ 
     # 2. Compute indicators
     data[f"EMA{win_short}"] = ema(data["Close"], win_short)
     data[f"EMA{win_long}"]  = ema(data["Close"], win_long)
     data["MACD"], data["MACD_signal"] = macd(data["Close"])
     data["RSI"] = rsi(data["Close"])
-
+ 
     # 3. Simulate trades — full capital deployed per trade (position sizing fix)
     cash        = initial_capital
     position    = 0        # 0=flat, 1=long, -1=short
     entry_price = 0.0
     shares      = 0.0      # number of shares held
-
+ 
     equity_curve  = []
     buy_indices   = []
     sell_indices  = []
     trade_log     = []
-
+ 
     for i in range(len(data)):
         price      = float(data["Close"].iloc[i])
         trend_up   = data[f"EMA{win_short}"].iloc[i] > data[f"EMA{win_long}"].iloc[i]
@@ -185,7 +185,7 @@ def run_backtest(
         rsi_val    = data["RSI"].iloc[i]
         rsi_low    = rsi_val < rsi_lower
         rsi_high   = rsi_val > rsi_upper
-
+ 
         # LONG ENTRY — buy as many shares as cash allows
         if position == 0 and trend_up and macd_up and rsi_low:
             shares      = cash / price
@@ -193,7 +193,7 @@ def run_backtest(
             cash        = 0.0
             position    = 1
             buy_indices.append(i)
-
+ 
         # SHORT ENTRY — simulate shorting with full capital
         elif position == 0 and trend_down and macd_down and rsi_high:
             shares      = cash / price
@@ -201,7 +201,7 @@ def run_backtest(
             cash        = 0.0
             position    = -1
             sell_indices.append(i)
-
+ 
         # EXIT LONG — sell all shares at current price
         elif position == 1 and rsi_high:
             proceeds = shares * price
@@ -215,7 +215,7 @@ def run_backtest(
             })
             position = 0
             shares   = 0.0
-
+ 
         # EXIT SHORT — buy back shares to close position
         elif position == -1 and rsi_low:
             pnl  = shares * (entry_price - price)
@@ -228,7 +228,7 @@ def run_backtest(
             })
             position = 0
             shares   = 0.0
-
+ 
         # EQUITY SNAPSHOT — mark-to-market value at each bar
         if position == 1:
             equity = shares * price
@@ -237,25 +237,25 @@ def run_backtest(
         else:
             equity = cash
         equity_curve.append(equity)
-
+ 
     data["Equity"] = equity_curve
-
+ 
     # 4. Collect results
     final_equity = equity_curve[-1] if equity_curve else initial_capital
     total_return = (final_equity - initial_capital) / initial_capital * 100
-
+ 
     buy_dates   = [data.index[i] for i in buy_indices]
     sell_dates  = [data.index[i] for i in sell_indices]
     buy_prices  = [float(data["Close"].iloc[i]) for i in buy_indices]
     sell_prices = [float(data["Close"].iloc[i]) for i in sell_indices]
-
+ 
     metrics = _compute_metrics(
         equity_curve    = equity_curve,
         close_prices    = data["Close"],
         trade_log       = trade_log,
         initial_capital = initial_capital,
     )
-
+ 
     return {
         "data":            data,
         "buy_dates":       buy_dates,
@@ -271,3 +271,4 @@ def run_backtest(
         "trade_log":       trade_log,
         "error":           None,
     }
+ 
