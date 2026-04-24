@@ -31,9 +31,9 @@ def ema(series: pd.Series, span: int) -> pd.Series:
 
 
 def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
-    ema_fast   = ema(series, fast)
-    ema_slow   = ema(series, slow)
-    macd_line  = ema_fast - ema_slow
+    ema_fast    = ema(series, fast)
+    ema_slow    = ema(series, slow)
+    macd_line   = ema_fast - ema_slow
     signal_line = ema(macd_line, signal)
     return macd_line, signal_line
 
@@ -104,12 +104,11 @@ def _compute_metrics(
     profit_factor = (gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win > 0 else 0.0
 
     # ── Buy & Hold benchmark ───────────────────────────────────────────────
-    # Same capital, same period, just hold the underlying from day 1.
     first_price = float(close_prices.iloc[0])
     last_price  = float(close_prices.iloc[-1])
     bh_return   = (last_price - first_price) / first_price * 100
     bh_final    = initial_capital * (1 + bh_return / 100)
-    alpha       = total_return - bh_return   # strategy - benchmark, in %
+    alpha       = total_return - bh_return
 
     return {
         "total_return":   total_return,
@@ -137,40 +136,9 @@ def run_backtest(
     win_short:       int   = 15,
     win_long:        int   = 200,
     rsi_lower:       float = 50.0,
-    rsi_upper:       float = 53.0,
+    rsi_upper:       float = 65.0,
     initial_capital: float = 10_000.0,
 ) -> dict:
-    """
-    Run the Elder Triple Screen backtest and return all results needed
-    for the Streamlit dashboard charts and metrics.
-
-    Parameters
-    ----------
-    symbol          : Yahoo Finance ticker (e.g. 'AAPL', 'SPY')
-    start           : backtest start date  YYYY-MM-DD
-    end             : backtest end date    YYYY-MM-DD
-    win_short       : short EMA window
-    win_long        : long  EMA window
-    rsi_lower       : RSI threshold for long entry / short exit
-    rsi_upper       : RSI threshold for short entry / long exit
-    initial_capital : starting portfolio value in USD
-
-    Returns
-    -------
-    dict with keys:
-        data          : pd.DataFrame  full OHLCV + indicators + equity
-        buy_dates     : list[datetime]           — long entries
-        sell_dates    : list[datetime]           — short entries
-        buy_prices    : list[float]
-        sell_prices   : list[float]
-        final_equity  : float
-        total_return  : float  (%)
-        n_long_trades : int    — long entries taken
-        n_short_trades: int    — short entries taken
-        metrics       : dict   — performance metrics (see _compute_metrics)
-        trade_log     : list[dict]  — closed round-trip trades
-        error         : str | None  — non-None if download/calc failed
-    """
 
     # 1. Download data
     try:
@@ -178,7 +146,6 @@ def run_backtest(
         if raw.empty:
             return {"error": f"No data returned for '{symbol}'. Check the ticker."}
 
-        # Handle MultiIndex columns from yfinance
         if isinstance(raw.columns, pd.MultiIndex):
             data = raw.xs(symbol, axis=1, level="Ticker")
         else:
@@ -198,16 +165,16 @@ def run_backtest(
     data["MACD"], data["MACD_signal"] = macd(data["Close"])
     data["RSI"] = rsi(data["Close"])
 
-    # 3. Simulate trades
-    capital  = initial_capital
-    cash     = capital
-    position = 0        #  0=flat, 1=long, -1=short
+    # 3. Simulate trades — full capital deployed per trade (position sizing fix)
+    cash        = initial_capital
+    position    = 0        # 0=flat, 1=long, -1=short
     entry_price = 0.0
+    shares      = 0.0      # number of shares held
 
     equity_curve  = []
-    buy_indices   = []   # long entries
-    sell_indices  = []   # short entries
-    trade_log     = []   # closed round-trip trades
+    buy_indices   = []
+    sell_indices  = []
+    trade_log     = []
 
     for i in range(len(data)):
         price      = float(data["Close"].iloc[i])
@@ -219,22 +186,27 @@ def run_backtest(
         rsi_low    = rsi_val < rsi_lower
         rsi_high   = rsi_val > rsi_upper
 
-        # LONG ENTRY
+        # LONG ENTRY — buy as many shares as cash allows
         if position == 0 and trend_up and macd_up and rsi_low:
-            position    = 1
+            shares      = cash / price
             entry_price = price
+            cash        = 0.0
+            position    = 1
             buy_indices.append(i)
 
-        # SHORT ENTRY
+        # SHORT ENTRY — simulate shorting with full capital
         elif position == 0 and trend_down and macd_down and rsi_high:
-            position    = -1
+            shares      = cash / price
             entry_price = price
+            cash        = 0.0
+            position    = -1
             sell_indices.append(i)
 
-        # EXIT LONG
+        # EXIT LONG — sell all shares at current price
         elif position == 1 and rsi_high:
-            pnl      = price - entry_price
-            cash    += pnl
+            proceeds = shares * price
+            pnl      = proceeds - (shares * entry_price)
+            cash     = proceeds
             trade_log.append({
                 "side":        "long",
                 "entry_price": entry_price,
@@ -242,11 +214,12 @@ def run_backtest(
                 "pnl":         pnl,
             })
             position = 0
+            shares   = 0.0
 
-        # EXIT SHORT
+        # EXIT SHORT — buy back shares to close position
         elif position == -1 and rsi_low:
-            pnl      = entry_price - price
-            cash    += pnl
+            pnl  = shares * (entry_price - price)
+            cash = shares * entry_price + pnl
             trade_log.append({
                 "side":        "short",
                 "entry_price": entry_price,
@@ -254,12 +227,13 @@ def run_backtest(
                 "pnl":         pnl,
             })
             position = 0
+            shares   = 0.0
 
-        # EQUITY SNAPSHOT
+        # EQUITY SNAPSHOT — mark-to-market value at each bar
         if position == 1:
-            equity = cash + (price - entry_price)
+            equity = shares * price
         elif position == -1:
-            equity = cash + (entry_price - price)
+            equity = shares * entry_price + shares * (entry_price - price)
         else:
             equity = cash
         equity_curve.append(equity)
@@ -267,20 +241,19 @@ def run_backtest(
     data["Equity"] = equity_curve
 
     # 4. Collect results
-    final_equity   = equity_curve[-1] if equity_curve else initial_capital
-    total_return   = (final_equity - initial_capital) / initial_capital * 100
+    final_equity = equity_curve[-1] if equity_curve else initial_capital
+    total_return = (final_equity - initial_capital) / initial_capital * 100
 
-    buy_dates  = [data.index[i] for i in buy_indices]
-    sell_dates = [data.index[i] for i in sell_indices]
-    buy_prices = [float(data["Close"].iloc[i]) for i in buy_indices]
-    sell_prices= [float(data["Close"].iloc[i]) for i in sell_indices]
+    buy_dates   = [data.index[i] for i in buy_indices]
+    sell_dates  = [data.index[i] for i in sell_indices]
+    buy_prices  = [float(data["Close"].iloc[i]) for i in buy_indices]
+    sell_prices = [float(data["Close"].iloc[i]) for i in sell_indices]
 
-    # Performance metrics
     metrics = _compute_metrics(
-        equity_curve   = equity_curve,
-        close_prices   = data["Close"],
-        trade_log      = trade_log,
-        initial_capital= initial_capital,
+        equity_curve    = equity_curve,
+        close_prices    = data["Close"],
+        trade_log       = trade_log,
+        initial_capital = initial_capital,
     )
 
     return {
